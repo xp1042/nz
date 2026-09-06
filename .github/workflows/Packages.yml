@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       image_name:
-        description: '镜像名称'
+        description: 'jkmm'
         required: true
-        default: '请输入自己的镜像名称'
+        default: 'jkmm'
         type: string
       image_tag:
-        description: '镜像标签'
+        description: '20260906'
         required: true
         default: 'latest'
         type: string
