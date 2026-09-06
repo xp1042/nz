@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       image_name:
-        description: 'jkmm'
+        description: 'jk'
         required: true
-        default: 'jkmm'
+        default: 'jk'
         type: string
       image_tag:
         description: '20260906'
