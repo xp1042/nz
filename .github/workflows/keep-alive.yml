@@ -12,6 +12,11 @@ concurrency:
   group: keep-alive
   cancel-in-progress: false
 
+# 默认 GITHUB_TOKEN 无 actions:write，续链 dispatch 会被 403 静默拒绝
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   ping:
     runs-on: ubuntu-latest
