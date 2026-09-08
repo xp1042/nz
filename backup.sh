@@ -70,6 +70,21 @@ if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
     fi
     echo "[INFO] 源库 journal_mode: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA journal_mode;' 2>/dev/null || echo '查询失败')"
     echo "[INFO] 源库 servers 行数: $(sqlite3 "$DATA_DIR/sqlite.db" 'SELECT count(*) FROM servers;' 2>/dev/null || echo '查询失败')"
+    # 完整诊断打包进 zip（app 已停，读到的是落盘后的真实状态）
+    {
+        echo "=== 备份诊断 $(date '+%F %T') ==="
+        echo "--- 杀app标记: APP_KILLED=$APP_KILLED ---"
+        echo "--- DATA_DIR 清单(含mtime) ---"
+        ls -la --time-style=full-iso "$DATA_DIR" 2>/dev/null || ls -la "$DATA_DIR"
+        echo "--- 快照前 servers 全表 ---"
+        sqlite3 "$DATA_DIR/sqlite.db" "SELECT id,name,uuid FROM servers;" 2>&1
+        echo "--- journal_mode: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA journal_mode;' 2>&1) ---"
+        echo "--- wal_checkpoint(TRUNCATE) 结果: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA wal_checkpoint(TRUNCATE);' 2>&1) ---"
+        echo "--- checkpoint后 servers 全表 ---"
+        sqlite3 "$DATA_DIR/sqlite.db" "SELECT id,name,uuid FROM servers;" 2>&1
+        echo "--- 文件md5 ---"
+        md5sum "$DATA_DIR"/sqlite.db* 2>/dev/null
+    } > "$TEMP_DIR/data/backup-diag.txt" 2>&1
     echo "[INFO] SQLite 一致性快照（含 WAL 最新写入）..."
     mkdir -p "$TEMP_DIR/data"
     if ! sqlite3 "$DATA_DIR/sqlite.db" ".backup '$TEMP_DIR/data/sqlite.db'"; then
