@@ -50,7 +50,13 @@ trap cleanup EXIT
 
 # 复制数据（SQLite 用在线 .backup 生成一致性快照，避免 WAL 未落盘导致备份缺数据）
 echo "[INFO] 复制数据..."
+if [ -f "$DATA_DIR/sqlite.db" ]; then
+    echo "[INFO] 数据目录清单:"
+    ls -la "$DATA_DIR" 2>/dev/null || true
+fi
 if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    echo "[INFO] 源库 journal_mode: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA journal_mode;' 2>/dev/null || echo '查询失败')"
+    echo "[INFO] 源库 servers 行数: $(sqlite3 "$DATA_DIR/sqlite.db" 'SELECT count(*) FROM servers;' 2>/dev/null || echo '查询失败')"
     echo "[INFO] SQLite 一致性快照（含 WAL 最新写入）..."
     mkdir -p "$TEMP_DIR/data"
     if ! sqlite3 "$DATA_DIR/sqlite.db" ".backup '$TEMP_DIR/data/sqlite.db'"; then
