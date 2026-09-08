@@ -18,10 +18,10 @@ jobs:
     steps:
       - name: Ping Koyeb app (驻留模式)
         run: |
-          for i in 1 2; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://fascinating-brietta-xp1042-bcf3f4c7.koyeb.app/ || true)
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://fascinating-brietta-xp1042-bcf3f4c7.koyeb.app/ || true)
             echo "$(date -u +%FT%TZ) ping #$i -> HTTP $code"
-            [ $i -eq 1 ] && sleep 240
+            [ $i -lt 5 ] && sleep 60 || true
           done
       - name: 续链（重新 dispatch 自己）
         if: always()
