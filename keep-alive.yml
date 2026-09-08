@@ -1,0 +1,17 @@
+name: Keep Alive
+
+# 每 5 分钟 ping 一次 Koyeb 应用域名，防止免费实例深度休眠
+# 注意：必须 ping *.koyeb.app 域名（自定义域名流量无法唤醒休眠实例）
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Koyeb app
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://fascinating-brietta-xp1042-bcf3f4c7.koyeb.app/ || true)
+          echo "$(date -u +%FT%TZ) ping -> HTTP $code"
