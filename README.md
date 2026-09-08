@@ -1,179 +1,137 @@
-# ⭐ Star 星星走起 动动发财手点点 ⭐
+# ⭐ Star 万万岁 ⭐ 一键哪吒面板 🚀
 
-## 在 Hugging Face 部署哪吒面板 V1 版（带自动备份功能）
+## 在 Hugging Face 部署哪吒面板 **V2** 版（带自动备份功能）
 
-> **重要提示**：本方案未使用 `OAuth 2.0` 登录（授权流程较繁琐），因此**安装完成后必须立即进入面板修改默认密码**以确保安全。
-
----
-
-## 📋 必需环境变量配置示例
-
-| 变量名                 | 示例值                             | 必填 | 说明                                                                               |
-| ------------------- | ------------------------------- | -- | -------------------------------------------------------------------------------- |
-| `ARGO_AUTH`         | `eyJhIjoi.......`               | ✅  | Argo Tunnel 认证 Token，从 [Cloudflare Tunnels](https://one.dash.cloudflare.com/) 获取 |
-| `ARGO_DOMAIN`       | `nezha.com`                  | ✅  | 面板访问域名，同时用于探针上报                                                                  |
-| `GITHUB_TOKEN`      | `ghp_xxxxxxxx`                  | ✅  | GitHub Token，用于配置文件自动备份到 GitHub                                                  |
-| `GITHUB_REPO_OWNER` | `your_username`                 | ✅  | 备份仓库所有者                                                                          |
-| `GITHUB_REPO_NAME`  | `nezha-backup`                  | ✅  | 存储配置备份的仓库名称 `注意配置私有仓库`                                                              |
-| `GITHUB_BRANCH`     | `main`                          | ✅  | 备份使用的分支名称                                                                        |
-| `ZIP_PASSWORD`      | `147369`                        | ✅  | 备份压缩包加密密码                                                                        |
-| `NZ_UUID`           | `f8ff434*************62e0`      | ✅  |  在线生成访问:https://www.uuidgenerator.net/                                                           |
-| `NZ_CLIENT_SECRET`  | `kDerKiyNp*************mvj0XMy` | ❌  | `自动生成` 备份文件中 `.yaml` 文件里的 `agentsecretkey` 参数                                           |
-| `NZ_TLS`            | `true`                          | ❌  | 是否启用 TLS，默认 `true`                                                               |
-| `DASHBOARD_VERSION` | `v1.14.1`                       | ❌  | 指定部署的面板版本，默认 `latest`                                                            |
-| `PROJECT_URL` | `https://xxx.hf.space`                       | ❌  | 设置即启用保活，不设置则跳过                                                            |
+> **请注意**：本版本已适配哪吒面板 **V2**（面板与 Agent 均为 V2），并**移除了原版的第三方"访问保活"上报**——本镜像不会向任何第三方发送你的面板地址。
+> 若需自行保活，可使用你自己的 UptimeRobot 等外部监控服务直接监控面板地址即可。
 
 ---
 
-## 🔧 Cloudflare Tunnel 配置
+## 📋 部署参数说明
 
-在运行项目之前，需要完成以下设置：
+| 变量名             | 示例值                                       | 必需 | 说明 |
+| ------------------ | -------------------------------------------- | ---- | ---- |
+| `ARGO_AUTH`        | `eyJhIjoi....`                               | ✔️   | Argo Tunnel Token，从 [Cloudflare Tunnels](https://one.dash.cloudflare.com/) 获取 |
+| `ARGO_DOMAIN`      | `nezha.com`                                  | ✔️   | 面板访问域名，会同时用于内嵌 Agent 上报 |
+| `GITHUB_TOKEN`     | `ghp_xxxxxxxx`                               | ✔️   | GitHub Token，用于自动备份到 GitHub 私库 |
+| `GITHUB_REPO_OWNER`| `your_username`                              | ✔️   | 存储备份的 GitHub 用户名 |
+| `GITHUB_REPO_NAME` | `nezha-backup`                               | ✔️   | 备份仓库名称（建议建私库） |
+| `GITHUB_BRANCH`    | `main`                                       | ✔️   | 备份仓库使用的分支 |
+| `ZIP_PASSWORD`     | `147369`                                     | ✔️   | 备份压缩包加密口令 |
+| `NZ_UUID`          | `f8ff434***********62e0`                     | ✔️   | 在面板"管理后台 → 服务器"里添加服务器后获得的 Agent UUID |
+| `NZ_CLIENT_SECRET` | `kDerKiY***********mvj0XMy`                  | ❌   | 从面板"管理后台 → 管理设置"里的 `agentsecretkey` 复制；不填则首次启动自动生成 |
+| `NZ_TLS`           | `true`                                       | ❌   | 是否使用 TLS，默认 `true` |
+| `DASHBOARD_VERSION`| `v2.3.8`                                     | ❌   | 面板版本，默认 `latest`（官方最新 **V2** 版） |
+| `BACKUP_HOUR`      | `4`                                          | ❌   | 每日自动备份的时间（小时，容器时区 Asia/Shanghai），默认凌晨 4 点 |
 
-### 1. 开启 gRPC 流量代理
+### 与原 V1 版的差异
 
-在 Cloudflare 中为你的域名**启用 gRPC 支持**。
-
-### 2. 配置 Tunnel Public Hostname
-
-设置参数如下：
-
-- **Type**: `HTTPS`
-- **URL**: `localhost:443`
-- **Additional application settings**:
-  - **TLS 设置**:
-    - ✅ `No TLS Verify`（关闭 TLS 验证）
-    - ✅ `HTTP2 connection`（启用 HTTP/2 连接）
-
-> **重要**：完成配置后，记录下 Argo 域名和 Token，供后续使用。
-
----
-
-## 🌐 访问说明
-
-| 访问地址 | 说明 |
-| --- | --- |
-| **Hugging Face 分配的 URL** | 伪装页面（用于隐藏真实身份） |
-| **Cloudflare 域名**（`ARGO_DOMAIN`） | **真实的哪吒面板访问地址** ⭐ |
-
-> **提示**：请使用 Cloudflare 域名访问哪吒面板，Hugging Face 分配的 URL 仅作为部署容器的入口，不是面板的实际访问地址。
+- 面板默认安装官方最新 **V2** 版（`DASHBOARD_VERSION` 可指定任意 `v2.x` 版本）；
+- 内嵌 Agent 优先加载 **V2 agent** 动态库（`agent-<arch>.so`），不兼容时自动回退 V1（`v1-<arch>.so`）；
+- 生成的面板配置已清理 V2 中废弃的 `max_agent_conn` / `grpc_*` 等键；
+- 旧版（V1）备份恢复时自动迁移配置（删除废弃键，数据文件结构 V1/V2 通用）；
+- **移除**了部署时向 `oyz8.ct8.pl` 第三方上报面板地址的行为（隐私考虑）。
 
 ---
 
-## 💾 触发备份
-### 方法 1：自动备份
-- 默认:凌晨4点自动备份
+## 🚀 快速部署
 
-### 方法 2：手动备份 通过 GitHub 网页操作
+### 1. Fork 仓库后启用 Actions
 
-1. 访问你的备份仓库
-2. 打开或生建 `README.md` 文件
-3. 点击右上角的编辑按钮（铅笔图标 ✏️）
-4. 将文件内容**全部替换**为：`backup`
-5. 点击 **"提交更改"** 提交
-6. 等待最多 1 小时（守护进程每小时自动检查一次）
+Fork 本仓库 → **Actions** → 启用工作流。
 
+### 2. 构建自己的 Docker 镜像
+
+1. 进入 **Actions** → 选择 **🐳 构建最新的镜像并上传**；
+2. **Run workflow**（镜像名随意，如 `nz`，标签默认 `latest`）；
+3. 等待构建完成（3–10 分钟），镜像地址：
+   `ghcr.io/<你的用户名>/<镜像名>:latest`
+
+### 3. 创建 Cloudflare Tunnel
+
+1. 登录 [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → Tunnels**；
+2. **Create a tunnel** → 选择 Cloudflared → 命名（如 `nezha`）→ 保存；
+3. 复制 **Token**（即 `ARGO_AUTH`）；
+4. **Public Hostname** 里把你的域名指向 `http://localhost:8008`。
+
+### 4. 准备备份私库与 Token
+
+见下方"🧭 一步一步照着做教程"，创建私库（如 `nezha-backup`）与 GitHub Token。
+
+### 5. 部署 Hugging Face Space
+
+1. 新建 Space → 选择 **Docker** 类型；
+2. 在 **Settings → Variables and secrets** 中添加上表中的变量（`ARGO_AUTH`、`GITHUB_TOKEN` 等建议用 **Secret**）；
+3. Space 的 README 中指定镜像：
+
+```yaml
 ---
-
-## 📁 项目文件说明
-
-```
-.
-├── .github/workflows/
-│   └── Packages.yml              # GitHub Actions 工作流
-├── backup.sh                     # 配置备份脚本
-├── restore.sh                    # 配置恢复脚本
-├── Dockerfile                    # Docker 镜像定义
-├── entrypoint.sh                 # 容器启动入口
-├── main.conf                     # 主配置文件
-├── ssl.conf.template             # SSL 配置模板
-├── index.html                    # 伪装页面
-├── 一步一步照着做教程.md          # 保姆级教程文档
-└── README.md                     # 项目文档
+title: Nz V2
+emoji: 🚀
+colorFrom: gray
+colorTo: gray
+sdk: docker
+app_port: 7860
+---
 ```
 
-| 文件 | 用途 | 备注 |
-| --- | --- | --- |
-| `Packages.yml` | GitHub Actions 工作流 | 自动生成并推送 Docker 镜像到 Packages |
-| `backup.sh` | 配置备份脚本 | 定期备份哪吒面板配置到 GitHub |
-| `restore.sh` | 配置恢复脚本 | 从备份恢复哪吒面板配置 |
-| `Dockerfile` | Docker 镜像定义 | 定义容器构建规则和依赖 |
-| `entrypoint.sh` | 容器启动入口 | 容器启动时执行的初始化脚本 |
-| `main.conf` | 主配置文件 | 哪吒面板主要配置 |
-| `ssl.conf.template` | SSL 配置模板 | Nginx SSL 配置模板文件 |
-| `index.html` | 伪装页面 | **建议用 AI 生成自定义内容**，隐藏真实身份 |
-| `README.md` | 项目文档 | 部署说明和使用指南 |
+4. 等待构建完成，访问 `https://<你的域名>` 进入面板。
+
+### 6. 获取 NZ_UUID / NZ_CLIENT_SECRET
+
+- 打开面板 → **管理后台**；
+- 默认账号密码为 `admin` / `admin`（首次登录后请立即修改！）；
+- **管理后台 → 服务器 → 添加服务器**，得到的 `UUID` 填入 `NZ_UUID`；
+- **管理后台 → 系统设置** 中的 `Agentsecretkey` 即 `NZ_CLIENT_SECRET`（不填则首次启动自动生成，可在配置文件中查看）。
 
 ---
 
-## 🚀 快速开始
+## 💾 数据自动备份
 
-### 第 1 步：Fork 仓库
+- 每天定时自动把 `/dashboard/data`（数据库、主题等）加密压缩上传到你的 GitHub 私库；
+- 每次重启容器时自动恢复最新备份；
+- 手动触发：修改备份私库的 `README.md`，内容仅写 `backup`，一分钟后会触发备份并自动清空该文件；
+- 保留最近 `KEEP_BACKUPS`（默认 5）份备份，旧的自动删除。
 
-点击右上角 **Fork** 按钮，将项目复制到你的账户。
+---
 
-### 第 2 步：启用 GitHub Actions
+## ⚠️ 注意
 
-1. 进入 **Actions** 选项卡
-2. 点击 **I understand my workflows**
-3. 构建自己的镜像
+* 面板版本可在部署时通过 `DASHBOARD_VERSION` 指定（默认 latest，即官方最新 **V2** 版）；
+* 部署成功后请**立即修改默认管理员密码**；
+* 本镜像不含任何第三方数据上报，`PROJECT_URL` 变量已废弃，无需设置。
 
-### 第 3 步：查看镜像地址
+---
 
-1. 进入 **Packages** 页面
-2. 找到镜像地址，例如：`docker pull ghcr.io/oyz8/nz:latest`
-3. 记录此地址
+## 📮 Telegram 通知（可选）
 
-### 第 4 步：配置 Hugging Face 变量
+在面板 **管理后台 → 报警 → 通知方式** 中新建：
 
-1. 登录 [Hugging Face](https://huggingface.co/)
-2. 创建新的 Space（选择 Docker 模板）
-3. 在 **Settings** → **Repository secrets** 中添加所有必需的环境变量（见上表）
+- **URL**：`https://api.telegram.org/bot<你的BOT_TOKEN>/sendMessage`
+- **请求方式**: POST
+- **请求类型**: JSON
+- **Body**:
 
-### 第 5 步：添加 Dockerfile
-
-在 Hugging Face Space 中添加 `Dockerfile` 文件，内容如下：
-
-```dockerfile
-FROM ghcr.io/oyz8/nz:latest
-```
-
-### 第 6 步：查看部署日志
-
-1. 进入 **Logs** 页面，查看部署进度。
-2. 部署成功后，使用 Cloudflare 分配的域名（即环境变量 `ARGO_DOMAIN` 的值）访问面板。
-3. **保活提醒**：HuggingFace Space 需要保持活跃以防休眠，请自行处理保活，或通过设置 `PROJECT_URL` 变量来实现自动保活。
-4. **哪吒面板设置 Telegram 通知收不到 ？**  
-   这是 HuggingFace 的常见网络限制，无法直接访问 `api.telegram.org`。你必须配置一个反代地址。可使用:[Cloudflare Workers 自建反代脚本](https://raw.githubusercontent.com/oyz8/LemeHost/refs/heads/main/_worker.js)
-
-- URL如下
-```URL
-https://xxx.xxx.workers.dev/bot123456789:Assssssssssssssssssssk/sendMessage
-```
-- 请求方式:POST
-- 类型:JSON
-- 请求体如下
-```请求体
+```json
 {
     "chat_id": "123456789",
-    "text": "🔰 *探针警报*\n\n*来自*: \" *#SERVER.NAME# *\"\n*#NEZHA#*\n\n*时间*： *#DATETIME# *",
+    "text": "🟢 *哪吒监控告警*\n\n*规则*: *#RULENAME#\n\n*服务器*: *#SERVER.NAME# #NEZHA#\n\n*时间*: #DATETIME#",
     "parse_mode": "Markdown",
     "reply_markup": {
         "inline_keyboard": [
             [
                 {
-                    "text": " 探针仪表盘",
+                    "text": " 管理面板入口",
                     "url": "https://nezha.com"
                 }
             ]
         ]
     }
+}
 ```
-- 勾选:验证TLS
+
+- **确认**: 请求体检查 TLS
 
 ---
 
-### *祝部署顺利！* 🎉
-
-
-
-
+### *更多搭建教程！* 🎉

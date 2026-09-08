@@ -16,7 +16,6 @@ GITHUB_TOKEN=${GITHUB_TOKEN:-""}
 GITHUB_BRANCH=${GITHUB_BRANCH:-main}
 ZIP_PASSWORD=${ZIP_PASSWORD:-""}
 
-PROJECT_URL=${PROJECT_URL:-""}
 
 # =========================
 # 日志函数
@@ -37,23 +36,6 @@ log_error() {
     echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') $1"
 }
 
-# =========================
-# 保活函数
-# =========================
-add_visit_task() {
-    if [ -z "$PROJECT_URL" ]; then
-        log_info "跳过自动保活任务"
-        return 0
-    fi
-
-    if curl -s -X POST "https://oyz8.ct8.pl/add-url" \
-        -H "Content-Type: application/json" \
-        -d "{\"url\":\"$PROJECT_URL\"}" >/dev/null; then
-        log_ok "自动保活任务添加成功"
-    else
-        log_error "添加自动保活任务失败"
-    fi
-}
 
 # =========================
 # 端口等待函数（使用 curl 检测 HTTP 服务）
@@ -149,7 +131,7 @@ EOF
 fi
 
 # =========================
-# 步骤 3.6: 提升系统限制 + 面板高并发参数
+# 步骤 3.6: 提升系统限制 + 面板 V2 配置迁移
 # =========================
 echo "=========================================="
 echo " 步骤 3.6: 优化系统限制 & 面板参数"
@@ -158,13 +140,15 @@ echo "=========================================="
 ulimit -n 65536 2>/dev/null || true
 log_info "文件描述符限制已尝试提升至 65536"
 
+# V2 适配：哪吒面板 V2 已废弃以下 V1 配置键（未知键会被忽略，这里主动清理）
 if [ -f /dashboard/data/config.yaml ]; then
-    grep -q 'max_agent_conn' /dashboard/data/config.yaml || echo 'max_agent_conn: 2000' >> /dashboard/data/config.yaml
-    grep -q 'grpc_max_concurrent_streams' /dashboard/data/config.yaml || echo 'grpc_max_concurrent_streams: 2000' >> /dashboard/data/config.yaml
-    grep -q 'grpc_max_conn_age' /dashboard/data/config.yaml || echo 'grpc_max_conn_age: 0' >> /dashboard/data/config.yaml
-    grep -q 'grpc_keepalive_time' /dashboard/data/config.yaml || echo 'grpc_keepalive_time: 10s' >> /dashboard/data/config.yaml
-    grep -q 'grpc_keepalive_timeout' /dashboard/data/config.yaml || echo 'grpc_keepalive_timeout: 5s' >> /dashboard/data/config.yaml
-    log_ok "面板高并发参数已补丁"
+    sed -i -e '/^max_agent_conn:/d' \
+           -e '/^grpc_max_concurrent_streams:/d' \
+           -e '/^grpc_max_conn_age:/d' \
+           -e '/^grpc_keepalive_time:/d' \
+           -e '/^grpc_keepalive_timeout:/d' \
+           /dashboard/data/config.yaml 2>/dev/null || true
+    log_ok "面板配置已按 V2 规范整理"
 fi
 
 # =========================
@@ -184,17 +168,17 @@ if ! wait_for_port 8008 60; then
 fi
 
 sleep 3
-log_ok "面板已完全就绪"
+log_ok "面板启动成功"
 
 # =========================
-# 步骤 5: 生成 SSL 证书
+# 步骤 5: 生成自签证书并启用 HTTPS（Argo 隧道回源用）
 # =========================
 if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
-    echo " 步骤 5: 生成 SSL 证书"
+    echo " 步骤 5: 生成证书"
     echo "=========================================="
 
-    log_info "生成证书: $ARGO_DOMAIN"
+    log_info "证书域名: $ARGO_DOMAIN"
     openssl genrsa -out /dashboard/nezha.key 2048 2>/dev/null
     openssl req -new -subj "/CN=$ARGO_DOMAIN" -key /dashboard/nezha.key -out /dashboard/nezha.csr 2>/dev/null
     openssl x509 -req -days 36500 -in /dashboard/nezha.csr -signkey /dashboard/nezha.key -out /dashboard/nezha.pem 2>/dev/null
@@ -203,40 +187,40 @@ if [ -n "$ARGO_DOMAIN" ]; then
 
     nginx -s reload
     sleep 1
-    log_ok "证书生成完成，443 端口已启用"
+    log_ok "证书配置完成，443 端口已启用"
 else
-    log_warn "未设置 ARGO_DOMAIN，跳过证书生成"
+    log_warn "未配置 ARGO_DOMAIN，跳过证书生成"
 fi
 
 # =========================
-# 步骤 6: 启动 cloudflared（动态库方式）
+# 步骤 6: 启动 cloudflared (隧道模式)
 # =========================
 if [ -n "$ARGO_AUTH" ]; then
     echo "=========================================="
-    echo " 步骤 6: 启动 cloudflared (动态库)"
+    echo " 步骤 6: 启动 cloudflared (隧道模式)"
     echo "=========================================="
 
     python3 /start_cloudflared.py > /dev/null 2>&1 &
     sleep 5
 
     if pgrep -f "python3 /start_cloudflared.py" >/dev/null; then
-        log_ok "cloudflared 启动成功"
+        log_ok "cloudflared 已启动"
     else
         log_error "cloudflared 启动失败"
     fi
 else
-    log_warn "未设置 ARGO_AUTH，跳过 cloudflared"
+    log_warn "未配置 ARGO_AUTH，跳过隧道"
 fi
 
 # =========================
-# 步骤 7: 启动探针（动态库方式）
+# 步骤 7: 启动探针（面板内嵌）
 # =========================
 if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
-    echo " 步骤 7: 启动探针 (动态库)"
+    echo " 步骤 7: 启动探针"
     echo "=========================================="
 
-    log_info "等待隧道建立"
+    log_info "等待面板就绪"
     sleep 5
 
     AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
@@ -279,7 +263,7 @@ EOF
         fi
     fi
 else
-    log_warn "未设置 ARGO_DOMAIN，跳过探针"
+    log_warn "未配置 ARGO_DOMAIN，跳过探针"
 fi
 
 # =========================
@@ -294,13 +278,13 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_N
         API_BASE="https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
         BACKUP_HOUR=${BACKUP_HOUR:-4}
 
-        log_info "备份守护进程启动，定时备份时间: ${BACKUP_HOUR}:00"
+        log_info "备份守护进程已启动，每日备份时间: ${BACKUP_HOUR}:00"
 
         while true; do
             current_date=$(date +"%Y-%m-%d")
             current_hour=$(date +"%H")
 
-            # ─── 读取 README.md 原始内容 ───
+            # 读取 README.md 判断是否需要备份
             readme_raw=$(curl -s \
                 -H "Authorization: token $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github.v3+json" \
@@ -313,46 +297,45 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_N
             should_backup=false
             backup_reason=""
 
-            # ─── 优先检查手动触发 ───
+            # 判断内容是否为 backup（手动触发）
             if [ "$readme_trimmed" = "backup" ]; then
                 should_backup=true
                 backup_reason="手动触发"
 
-            # ─── 定时检查：到达备份小时才执行 ───
+            # 每日定时备份
             elif [ "$current_hour" -eq "$BACKUP_HOUR" ]; then
 
-                # 从 README.md 提取备份日期
-                # 匹配格式：- **备份时间**: 2026-06-24 00:16:30
+                # 从 README.md 提取上次备份日期
+                # 格式例如：- **备份时间**: 2026-06-24 00:16:30
                 backup_date=$(echo "$readme_raw" \
                     | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' \
                     | head -n1 \
                     | cut -d' ' -f1)
 
-                log_info "定时检查: 当前=${current_date}, README备份日期=${backup_date:-未知}"
+                log_info "定时备份检查: 今天=${current_date}, 上次备份=${backup_date:--无记录}"
 
                 if [ -z "$backup_date" ]; then
-                    # README 无日期记录，从未备份过
+                    # README 无日期记录，执行备份
                     should_backup=true
-                    backup_reason="首次备份（README无记录）"
+                    backup_reason="每日备份（无历史记录）"
                 elif [ "$backup_date" != "$current_date" ]; then
-                    # 备份日期不是今天
+                    # 上次备份不是今天
                     should_backup=true
-                    backup_reason="定时备份 (上次=${backup_date}, 今日=${current_date})"
+                    backup_reason="每日备份 (上次: $backup_date)"
                 else
-                    log_info "今日已备份 (${backup_date})，跳过"
+                    log_info "今天已备份 (${backup_date})，跳过"
                 fi
             fi
 
-            # ─── 执行备份 ───
+            # 触发备份
             if [ "$should_backup" = "true" ]; then
-                log_info "触发备份: $backup_reason"
-                if [ -f "/backup.sh" ]; then
-                    /backup.sh
-                    if [ $? -eq 0 ]; then
-                        log_ok "备份成功: $backup_reason"
-                    else
-                        log_error "备份失败: $backup_reason"
-                    fi
+                log_info "开始备份 ($backup_reason)"
+                bash /backup.sh
+
+                if [ $? -eq 0 ]; then
+                    log_ok "备份成功 ($backup_reason)"
+                else
+                    log_error "备份失败 ($backup_reason)"
                 fi
             fi
 
@@ -362,20 +345,11 @@ if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_REPO_OWNER" ] && [ -n "$GITHUB_REPO_N
 
     log_ok "备份守护进程已启动"
 else
-    log_warn "GITHUB_TOKEN & GITHUB_REPO_NAME & GITHUB_REPO_OWNER 未设置，跳过备份"
+    log_warn "未配置 GITHUB_REPO，跳过备份守护进程"
 fi
 
 # =========================
-# 步骤 9: 添加保活任务
-# =========================
-echo "=========================================="
-echo " 步骤 9: 添加保活任务"
-echo "=========================================="
-
-add_visit_task
-
-# =========================
-# 启动完成
+# 步骤 9: 启动完成
 # =========================
 echo "=========================================="
 echo " 启动完成"

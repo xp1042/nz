@@ -145,20 +145,30 @@ def main():
         'AGENT_LIB_URL',
         'https://github.com/oyz8/nz/releases/latest/download'
     )
-    so_filename = f'v1-{ARCH}.so'
-    so_url = f'{AGENT_LIB_URL}/{so_filename}'
 
-    try:
-        lib_path = download_library(so_url, so_filename)
-    except Exception as e:
-        print(f"[agent] Failed to download library: {e}", flush=True)
-        sys.exit(1)
+    # 动态库优先级：agent-<arch>.so 为哪吒面板 V2 agent 封装，v1-<arch>.so 为旧版 V1 封装
+    # V2 优先尝试；下载失败或导出符号不兼容时自动回退 V1
+    agent_started = False
+    for so_filename in (f'agent-{ARCH}.so', f'v1-{ARCH}.so'):
+        so_url = f'{AGENT_LIB_URL}/{so_filename}'
 
-    _service = AgentService(lib_path, config_path)
-    try:
-        _service.start()
-    except Exception as e:
-        print(f"[agent] Failed to start: {e}", flush=True)
+        try:
+            lib_path = download_library(so_url, so_filename)
+        except Exception as e:
+            print(f"[agent] Failed to download {so_filename}: {e}", flush=True)
+            continue
+
+        _service = AgentService(lib_path, config_path)
+        try:
+            _service.start()
+            agent_started = True
+            break
+        except Exception as e:
+            print(f"[agent] Failed to start with {so_filename}: {e}", flush=True)
+            _service.stop()
+
+    if not agent_started:
+        print("[agent] Failed to start agent: all libraries failed (V2 & V1)", flush=True)
         sys.exit(1)
 
     while True:

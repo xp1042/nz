@@ -55,6 +55,7 @@ cp -R "$DATA_DIR" "$TEMP_DIR/data"
 # 清理 SQLite 历史表（可选，减小备份大小）
 if [ -f "$TEMP_DIR/data/sqlite.db" ]; then
     echo "[INFO] 清理 SQLite 历史数据..."
+    sqlite3 "$TEMP_DIR/data/sqlite.db" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
     sqlite3 "$TEMP_DIR/data/sqlite.db" "DELETE FROM service_histories; VACUUM;" 2>/dev/null || true
 fi
 
