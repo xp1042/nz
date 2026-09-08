@@ -67,17 +67,26 @@ fi
 
 echo "[INFO] 备份文件: $BACKUP_FILE"
 
-# 下载备份文件
-echo "[INFO] 下载备份文件..."
-HTTP_CODE=$(curl -L -w "%{http_code}" \
-    -H "Authorization: token $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github.v3.raw" \
-    -o "$TMP_FILE" \
-    "$API_BASE/contents/$BACKUP_FILE?ref=$GITHUB_BRANCH")
+# 下载备份文件（失败或文件实际不存在时回退文件列表取最新）
+download_backup() {
+    local f="$1"
+    curl -sf -L --retry 2 \
+        -H "Authorization: token $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github.v3.raw" \
+        -o "$TMP_FILE" \
+        "$API_BASE/contents/$f?ref=$GITHUB_BRANCH"
+}
 
-if [ "$HTTP_CODE" != "200" ]; then
-    echo "[ERROR] 下载失败 (HTTP $HTTP_CODE)"
-    exit 1
+echo "[INFO] 下载备份文件..."
+if ! download_backup "$BACKUP_FILE" || ! unzip -t -P "$ZIP_PASSWORD" "$TMP_FILE" >/dev/null 2>&1; then
+    echo "[WARN] README 指定的 $BACKUP_FILE 下载失败，回退到文件列表取最新..."
+    BACKUP_FILE=$(curl -sf -H "Authorization: token $GITHUB_TOKEN" \
+        "$API_BASE/contents?ref=$GITHUB_BRANCH" \
+        | jq -r '.[].name' | grep '^data-.*\.zip$' | sort -r | head -n1)
+    if [ -z "$BACKUP_FILE" ] || ! download_backup "$BACKUP_FILE"; then
+        echo "[ERROR] 备份下载失败"
+        exit 1
+    fi
 fi
 
 if [ ! -s "$TMP_FILE" ]; then
