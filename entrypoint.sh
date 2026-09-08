@@ -10,6 +10,10 @@ NZ_CLIENT_SECRET=${NZ_CLIENT_SECRET:-""}
 NZ_TLS=${NZ_TLS:-true}
 DASHBOARD_VERSION=${DASHBOARD_VERSION:-latest}
 
+# V2 管理员凭据保障（通过面板 API 重置，密码请通过运行时环境变量注入，勿写入镜像/仓库）
+ADMIN_USER=${ADMIN_USER:-xp1042}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-""}
+
 GITHUB_REPO_OWNER=${GITHUB_REPO_OWNER:-""}
 GITHUB_REPO_NAME=${GITHUB_REPO_NAME:-""}
 GITHUB_TOKEN=${GITHUB_TOKEN:-""}
@@ -213,24 +217,89 @@ else
 fi
 
 # =========================
-# 步骤 7: 启动探针（面板内嵌）
+# 步骤 7: 管理员凭据保障 + 启动探针（面板内嵌）
 # =========================
 if [ -n "$ARGO_DOMAIN" ]; then
     echo "=========================================="
-    echo " 步骤 7: 启动探针"
+    echo " 步骤 7: 管理员凭据保障 + 启动探针"
     echo "=========================================="
 
-    log_info "等待面板就绪"
-    sleep 5
+    API=http://127.0.0.1:8008/api/v1
 
-    AGENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
+    # 登录辅助：输出 "token csrf"，失败输出空
+    nz_login() {
+        local jar resp token csrf
+        jar=/tmp/.nzjar.$$
+        rm -f "$jar"
+        resp=$(curl -s -c "$jar" -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$1\",\"password\":\"$2\"}" "$API/login" 2>/dev/null)
+        token=$(echo "$resp" | jq -r '.data.token // empty' 2>/dev/null)
+        if [ -z "$token" ]; then
+            rm -f "$jar"
+            return 1
+        fi
+        csrf=$(awk '$6=="nz-csrf" {print $7}' "$jar" 2>/dev/null | tail -n 1)
+        echo "$token $csrf"
+        rm -f "$jar"
+    }
+
+    # 7.1 管理员凭据保障：防止备份恢复把管理员账号回滚
+    if [ -n "$ADMIN_PASSWORD" ]; then
+        log_info "管理员凭据保障检查 ($ADMIN_USER)"
+        LG=$(nz_login "$ADMIN_USER" "$ADMIN_PASSWORD")
+        if [ -n "$LG" ]; then
+            log_ok "管理员凭据已确认 ($ADMIN_USER)"
+        else
+            LG=$(nz_login "admin" "admin")
+            if [ -n "$LG" ]; then
+                TOKEN=${LG%% *}
+                CSRF=${LG##* }
+                UP=$(curl -s -X POST "$API/profile" \
+                    -H "Authorization: Bearer $TOKEN" -H "X-CSRF-Token: $CSRF" \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"original_password\":\"admin\",\"new_username\":\"$ADMIN_USER\",\"new_password\":\"$ADMIN_PASSWORD\",\"reject_password\":false}" 2>/dev/null)
+                if echo "$UP" | grep -q '"success":true'; then
+                    log_ok "管理员已重置为 $ADMIN_USER（备份恢复回滚已纠正）"
+                else
+                    log_warn "管理员重置失败: $(echo "$UP" | head -c 120)"
+                fi
+            else
+                log_warn "面板登录失败（$ADMIN_USER 与 admin/admin 均不可用），跳过重置"
+            fi
+        fi
+    else
+        log_warn "未设置 ADMIN_PASSWORD，跳过管理员凭据保障"
+    fi
+
+    log_info "等待面板就绪"
+    sleep 2
+
+    # 7.2 获取 Agent 密钥：优先面板 API 的用户级密钥（V2 推荐）
+    NZ_CLIENT_SECRET=""
+    LG=$(nz_login "$ADMIN_USER" "$ADMIN_PASSWORD")
+    if [ -n "$LG" ]; then
+        TOKEN=${LG%% *}
+        NZ_CLIENT_SECRET=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/profile" 2>/dev/null | jq -r '.data.agent_secret // empty' 2>/dev/null)
+        if [ -n "$NZ_CLIENT_SECRET" ]; then
+            log_ok "已从面板 API 获取用户级 Agent 密钥 (长度 ${#NZ_CLIENT_SECRET})"
+        fi
+    fi
+
+    # 回退：配置文件全局密钥（旧版兼容）
+    if [ -z "$NZ_CLIENT_SECRET" ] && [ -f /dashboard/data/config.yaml ]; then
+        NZ_CLIENT_SECRET=$(grep '^agent_secret_key:' /dashboard/data/config.yaml | awk '{print $2}')
+        if [ -n "$NZ_CLIENT_SECRET" ]; then
+            log_warn "API 密钥不可用，使用配置文件全局密钥回退"
+        fi
+    fi
+
     NZ_UUID=${NZ_UUID:-$(cat /proc/sys/kernel/random/uuid)}
 
-    if [ -z "$AGENT_SECRET" ]; then
-        log_error "无法获取 agent_secret_key"
+    if [ -z "$NZ_CLIENT_SECRET" ]; then
+        log_error "无法获取 Agent 密钥（API 与配置文件均为空），跳过探针"
     else
-        cat > /dashboard/config.yaml <<EOF
-client_secret: $AGENT_SECRET
+        cat > /dashboard/config.yaml <<EOF2
+client_secret: $NZ_CLIENT_SECRET
 debug: true
 disable_auto_update: true
 disable_command_execute: false
@@ -249,17 +318,19 @@ tls: $NZ_TLS
 use_gitee_to_upgrade: false
 use_ipv6_country_code: false
 uuid: $NZ_UUID
-EOF
+EOF2
         log_info "探针配置: server=$ARGO_DOMAIN:443, tls=$NZ_TLS, uuid=$NZ_UUID"
 
-        python3 /start_agent.py /dashboard/config.yaml > /dev/null 2>&1 &
+        # 探针输出落盘（不再丢弃），启动失败时透传到容器日志
+        : > /dashboard/agent.log
+        python3 /start_agent.py /dashboard/config.yaml >> /dashboard/agent.log 2>&1 &
         AGENT_PID=$!
-        sleep 3
-
+        sleep 5
         if pgrep -f "python3 /start_agent.py" >/dev/null; then
             log_ok "探针启动成功 (PID: $AGENT_PID)"
         else
-            log_error "探针启动失败"
+            log_error "探针启动失败，最近日志:"
+            tail -n 15 /dashboard/agent.log 2>/dev/null | while IFS= read -r line; do log_warn "  $line"; done
         fi
     fi
 else
@@ -384,8 +455,9 @@ while true; do
     fi
 
     if [ -n "$ARGO_DOMAIN" ] && [ -f /dashboard/config.yaml ] && ! pgrep -f "python3 /start_agent.py" >/dev/null; then
-        python3 /start_agent.py /dashboard/config.yaml > /dev/null 2>&1 &
-        log_warn "探针已重启"
+        python3 /start_agent.py /dashboard/config.yaml >> /dashboard/agent.log 2>&1 &
+        log_warn "探针已重启，最近日志:"
+        tail -n 8 /dashboard/agent.log 2>/dev/null | while IFS= read -r line; do echo "  [agent] $line"; done
     fi
 
     sleep 60

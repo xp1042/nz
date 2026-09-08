@@ -19,8 +19,10 @@
 | `GITHUB_BRANCH`    | `main`                                       | ✔️   | 备份仓库使用的分支 |
 | `ZIP_PASSWORD`     | `147369`                                     | ✔️   | 备份压缩包加密口令 |
 | `NZ_UUID`          | `f8ff434***********62e0`                     | ✔️   | 在面板"管理后台 → 服务器"里添加服务器后获得的 Agent UUID |
-| `NZ_CLIENT_SECRET` | `kDerKiY***********mvj0XMy`                  | ❌   | 从面板"管理后台 → 管理设置"里的 `agentsecretkey` 复制；不填则首次启动自动生成 |
+| `NZ_CLIENT_SECRET` | `kDerKiY***********mvj0XMy`                  | ❌   | V2 下推荐留空：启动时会通过面板 API 自动获取管理员用户级 Agent 密钥；仅在 API 不可用时回退到 `config.yaml` 全局密钥 |
 | `NZ_TLS`           | `true`                                       | ❌   | 是否使用 TLS，默认 `true` |
+| `ADMIN_USER`       | `xp1042`                                     | ❌   | 管理员用户名，用于凭据保障与 Agent 密钥获取，默认 `xp1042` |
+| `ADMIN_PASSWORD`   | （运行时注入）                                 | ⚠️   | 管理员密码：用于开机自检/防备份回滚与 Agent 密钥获取。**仅通过运行时环境变量注入，勿写入镜像或仓库** |
 | `DASHBOARD_VERSION`| `v2.3.8`                                     | ❌   | 面板版本，默认 `latest`（官方最新 **V2** 版） |
 | `BACKUP_HOUR`      | `4`                                          | ❌   | 每日自动备份的时间（小时，容器时区 Asia/Shanghai），默认凌晨 4 点 |
 
@@ -28,6 +30,8 @@
 
 - 面板默认安装官方最新 **V2** 版（`DASHBOARD_VERSION` 可指定任意 `v2.x` 版本）；
 - 内嵌 Agent 优先加载 **V2 agent** 动态库（`agent-<arch>.so`），不兼容时自动回退 V1（`v1-<arch>.so`）；
+- 开机自动执行**管理员凭据保障**：备份恢复若把管理员账号回滚为 `admin/admin`，会自动重置回 `ADMIN_USER`/`ADMIN_PASSWORD`；
+- 内嵌 Agent 密钥自动从面板 API 获取**用户级 Agent Secret**（不再依赖恢复的旧 `config.yaml` 全局密钥），探针输出落盘 `/dashboard/agent.log` 并在看门狗重启时透传到容器日志；
 - 生成的面板配置已清理 V2 中废弃的 `max_agent_conn` / `grpc_*` 等键；
 - 旧版（V1）备份恢复时自动迁移配置（删除废弃键，数据文件结构 V1/V2 通用）；
 - **移除**了部署时向 `oyz8.ct8.pl` 第三方上报面板地址的行为（隐私考虑）。
