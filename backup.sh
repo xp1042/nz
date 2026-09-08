@@ -48,14 +48,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 复制数据
+# 复制数据（SQLite 用在线 .backup 生成一致性快照，避免 WAL 未落盘导致备份缺数据）
 echo "[INFO] 复制数据..."
-cp -R "$DATA_DIR" "$TEMP_DIR/data"
+if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    echo "[INFO] SQLite 一致性快照（含 WAL 最新写入）..."
+    mkdir -p "$TEMP_DIR/data"
+    if ! sqlite3 "$DATA_DIR/sqlite.db" ".backup '$TEMP_DIR/data/sqlite.db'"; then
+        echo "[ERROR] SQLite 快照失败，回退 cp 方式"
+        cp -R "$DATA_DIR" "$TEMP_DIR/data"
+    fi
+    # 复制数据库以外的数据文件（日志/upload 由下方规则清理）
+    (cd "$DATA_DIR" && find . -maxdepth 1 -type f ! -name 'sqlite.db*' -exec cp {} "$TEMP_DIR/data/" \; 2>/dev/null) || true
+else
+    cp -R "$DATA_DIR" "$TEMP_DIR/data"
+fi
 
 # 清理 SQLite 历史表（可选，减小备份大小）
 if [ -f "$TEMP_DIR/data/sqlite.db" ]; then
     echo "[INFO] 清理 SQLite 历史数据..."
-    sqlite3 "$TEMP_DIR/data/sqlite.db" "PRAGMA wal_checkpoint(TRUNCATE);" 2>/dev/null || true
     sqlite3 "$TEMP_DIR/data/sqlite.db" "DELETE FROM service_histories; VACUUM;" 2>/dev/null || true
 fi
 
