@@ -227,20 +227,21 @@ if [ -n "$ARGO_DOMAIN" ]; then
     API=http://127.0.0.1:8008/api/v1
 
     # 登录辅助：输出 "token csrf"，失败输出空
+    # （CSRF 从 Set-Cookie 响应头提取，避免依赖 cookie jar 的字段顺序）
     nz_login() {
-        local jar resp token csrf
-        jar=/tmp/.nzjar.$$
-        rm -f "$jar"
-        resp=$(curl -s -c "$jar" -H 'Content-Type: application/json' \
+        local hdr resp token csrf
+        hdr=/tmp/.nzhdr.$$
+        rm -f "$hdr"
+        resp=$(curl -s -D "$hdr" -H 'Content-Type: application/json' \
             -d "{\"username\":\"$1\",\"password\":\"$2\"}" "$API/login" 2>/dev/null)
         token=$(echo "$resp" | jq -r '.data.token // empty' 2>/dev/null)
         if [ -z "$token" ]; then
-            rm -f "$jar"
+            rm -f "$hdr"
             return 1
         fi
-        csrf=$(awk '$6=="nz-csrf" {print $7}' "$jar" 2>/dev/null | tail -n 1)
+        csrf=$(sed -n 's/.*[Nn]z-csrf=\([^;]*\).*/\1/p' "$hdr" 2>/dev/null | tail -n 1)
         echo "$token $csrf"
-        rm -f "$jar"
+        rm -f "$hdr"
     }
 
     # 7.1 管理员凭据保障：防止备份恢复把管理员账号回滚
@@ -255,7 +256,7 @@ if [ -n "$ARGO_DOMAIN" ]; then
                 TOKEN=${LG%% *}
                 CSRF=${LG##* }
                 UP=$(curl -s -X POST "$API/profile" \
-                    -H "Authorization: Bearer $TOKEN" -H "X-CSRF-Token: $CSRF" \
+                    -H "Authorization: Bearer $TOKEN" -H "X-CSRF-Token: $CSRF" -H "Cookie: nz-csrf=$CSRF" \
                     -H 'Content-Type: application/json' \
                     -d "{\"original_password\":\"admin\",\"new_username\":\"$ADMIN_USER\",\"new_password\":\"$ADMIN_PASSWORD\",\"reject_password\":false}" 2>/dev/null)
                 if echo "$UP" | grep -q '"success":true'; then
