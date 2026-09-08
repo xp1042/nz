@@ -55,6 +55,19 @@ if [ -f "$DATA_DIR/sqlite.db" ]; then
     ls -la "$DATA_DIR" 2>/dev/null || true
 fi
 if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
+    # 关键：面板进程存活时其 WAL 写入对外部读取不可见（曾导致备份缺数据）。
+    # 先停掉面板让 WAL 完整落盘，快照完成后再拉起（停机 ~3s）。
+    APP_KILLED=false
+    if pgrep -x "app" >/dev/null; then
+        echo "[INFO] 临时停止面板进程以落盘 SQLite 数据..."
+        pkill -x app 2>/dev/null || true
+        for i in 1 2 3 4 5 6 7 8; do
+            pgrep -x app >/dev/null || break
+            sleep 1
+        done
+        sleep 1
+        APP_KILLED=true
+    fi
     echo "[INFO] 源库 journal_mode: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA journal_mode;' 2>/dev/null || echo '查询失败')"
     echo "[INFO] 源库 servers 行数: $(sqlite3 "$DATA_DIR/sqlite.db" 'SELECT count(*) FROM servers;' 2>/dev/null || echo '查询失败')"
     echo "[INFO] SQLite 一致性快照（含 WAL 最新写入）..."
@@ -62,6 +75,12 @@ if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
     if ! sqlite3 "$DATA_DIR/sqlite.db" ".backup '$TEMP_DIR/data/sqlite.db'"; then
         echo "[ERROR] SQLite 快照失败，回退 cp 方式"
         cp -R "$DATA_DIR" "$TEMP_DIR/data"
+    fi
+    if [ "$APP_KILLED" = "true" ]; then
+        echo "[INFO] 重新启动面板进程..."
+        (cd /dashboard && nohup ./app > /dev/null 2>&1 &)
+        sleep 2
+        pgrep -x app >/dev/null && log_ok "面板已恢复运行" || log_error "面板恢复失败（看门狗将在 60s 内拉起）"
     fi
     # 复制数据库以外的数据文件（日志/upload 由下方规则清理）
     (cd "$DATA_DIR" && find . -maxdepth 1 -type f ! -name 'sqlite.db*' -exec cp {} "$TEMP_DIR/data/" \; 2>/dev/null) || true
