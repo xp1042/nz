@@ -70,6 +70,7 @@ if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
     fi
     echo "[INFO] 源库 journal_mode: $(sqlite3 "$DATA_DIR/sqlite.db" 'PRAGMA journal_mode;' 2>/dev/null || echo '查询失败')"
     echo "[INFO] 源库 servers 行数: $(sqlite3 "$DATA_DIR/sqlite.db" 'SELECT count(*) FROM servers;' 2>/dev/null || echo '查询失败')"
+    mkdir -p "$TEMP_DIR/data"
     # 完整诊断打包进 zip（app 已停，读到的是落盘后的真实状态）
     {
         echo "=== 备份诊断 $(date '+%F %T') ==="
@@ -86,7 +87,6 @@ if [ -f "$DATA_DIR/sqlite.db" ] && command -v sqlite3 >/dev/null 2>&1; then
         md5sum "$DATA_DIR"/sqlite.db* 2>/dev/null
     } > "$TEMP_DIR/data/backup-diag.txt" 2>&1
     echo "[INFO] SQLite 一致性快照（含 WAL 最新写入）..."
-    mkdir -p "$TEMP_DIR/data"
     if ! sqlite3 "$DATA_DIR/sqlite.db" ".backup '$TEMP_DIR/data/sqlite.db'"; then
         echo "[ERROR] SQLite 快照失败，回退 cp 方式"
         cp -R "$DATA_DIR" "$TEMP_DIR/data"
