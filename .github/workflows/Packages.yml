@@ -13,6 +13,16 @@ on:
         required: true
         default: 'latest'
         type: string
+      dockerfile:
+        description: 'Dockerfile 路径'
+        required: false
+        default: './Dockerfile'
+        type: string
+      context:
+        description: '构建上下文'
+        required: false
+        default: '.'
+        type: string
 
 jobs:
   build:
@@ -40,8 +50,8 @@ jobs:
       - name: 构建并推送镜像
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ inputs.image_tag }}
           cache-from: type=gha
