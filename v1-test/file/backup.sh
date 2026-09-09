@@ -43,6 +43,11 @@ if [ -f "$TEMP_DIR/data/sqlite.db" ]; then
     sqlite3 "$TEMP_DIR/data/sqlite.db" "DELETE FROM service_histories; VACUUM;" 2>/dev/null || true
 fi
 
+# sqlite3 打开副本时已自动回放 WAL，包内不得残留 wal/shm，避免恢复端重放错乱
+rm -f "$TEMP_DIR/data/sqlite.db-wal" "$TEMP_DIR/data/sqlite.db-shm" \
+      "$TEMP_DIR/data/data.db-wal" "$TEMP_DIR/data/data.db-shm" \
+      "$TEMP_DIR/data/sqlite.db-journal" "$TEMP_DIR/data/data.db-journal" 2>/dev/null || true
+
 # 删除不需要备份的文件
 rm -rf "$TEMP_DIR/data/upload" 2>/dev/null || true
 rm -f "$TEMP_DIR/data/"*.log 2>/dev/null || true
