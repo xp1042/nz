@@ -22,11 +22,6 @@ change_config() {
         echo "force_auth: $Force_Auth" >> "$CONFIG_FILE"
     fi
     echo "force_auth 已设置为 $Force_Auth"
-    # 诊断版：若无 debug 字段则注入 debug: true（面板 gRPC 请求日志）
-    if ! grep -q "^debug:" "$CONFIG_FILE"; then
-        echo "debug: true" >> "$CONFIG_FILE"
-        echo "debug: true 已注入（诊断版）"
-    fi
 }
 
 download_agent_dashboard() {
