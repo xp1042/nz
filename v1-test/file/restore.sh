@@ -116,6 +116,12 @@ if [ ! -d "$WORK_DIR/data" ]; then
     exit 0
 fi
 
+# 关键：清理宿主机磁盘上残留的 WAL/回滚日志，防止旧写入在打开时重放到刚恢复的库上
+rm -f "$WORK_DIR/data/sqlite.db-wal" "$WORK_DIR/data/sqlite.db-shm" \
+      "$WORK_DIR/data/data.db-wal" "$WORK_DIR/data/data.db-shm" \
+      "$WORK_DIR/data/sqlite.db-journal" "$WORK_DIR/data/data.db-journal" 2>/dev/null || true
+echo "[INFO] 已清理 SQLite WAL/journal 残留"
+
 echo "=========================================="
 echo "[SUCCESS] 恢复完成 🎉"
 echo "=========================================="
