@@ -22,6 +22,11 @@ change_config() {
         echo "force_auth: $Force_Auth" >> "$CONFIG_FILE"
     fi
     echo "force_auth 已设置为 $Force_Auth"
+    # 诊断版：若无 debug 字段则注入 debug: true（面板 gRPC 请求日志）
+    if ! grep -q "^debug:" "$CONFIG_FILE"; then
+        echo "debug: true" >> "$CONFIG_FILE"
+        echo "debug: true 已注入（诊断版）"
+    fi
 }
 
 download_agent_dashboard() {
@@ -197,7 +202,7 @@ user  nginx;
 worker_processes  auto;
 worker_rlimit_nofile 65535;
 
-error_log  /var/log/nginx/error.log notice;
+error_log  /dev/stderr notice;
 pid        /run/nginx.pid;
 
 events {
@@ -210,9 +215,9 @@ http {
 
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+                      '"$http_user_agent" "$http_x_forwarded_for" rt=$request_time';
 
-    access_log  /var/log/nginx/access.log  main;
+    access_log  /dev/stdout  main;
 
     sendfile        on;
     keepalive_timeout  65;
@@ -228,15 +233,15 @@ check_env_variables() {
 }
 
 start_services() {
-    nohup nginx >/dev/null 2>&1 &
+    nohup nginx >/dev/stdout 2>&1 &
 
     # 仅在设置了 ARGO_AUTH 时启动 cloudflared
     if [ -n "$ARGO_AUTH" ]; then
         local cf_bin="cloudflared-linux-${ARCH}"
-        nohup ./$cf_bin tunnel --protocol http2 run --token "$ARGO_AUTH" >/dev/null 2>&1 &
+        nohup ./$cf_bin tunnel --protocol http2 run --token "$ARGO_AUTH" >/dev/stdout 2>&1 &
     fi
 
-    nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    nohup ./dashboard-linux-${ARCH} >/dev/stdout 2>&1 &
 
     # 仅在同时设置了 NZ_UUID 与 ARGO_DOMAIN 时启动 agent
     if [ -n "$NZ_UUID" ] && [ -n "$ARGO_DOMAIN" ]; then
@@ -261,7 +266,7 @@ use_gitee_to_upgrade: false
 use_ipv6_country_code: false
 uuid: $NZ_UUID
 EOF
-        nohup ./nezha-agent >/dev/null 2>&1 &
+        nohup ./nezha-agent >/dev/stdout 2>&1 &
     fi
 }
 
@@ -295,7 +300,7 @@ main() {
     # 重启 dashboard 使 config 生效
     pkill -f "dashboard-linux-${ARCH}" || true
     sleep 1
-    nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    nohup ./dashboard-linux-${ARCH} >/dev/stdout 2>&1 &
 }
 
 main
