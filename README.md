@@ -281,6 +281,8 @@ bash tests/contract.sh   # 谓词极性 + 冷却时长（25 项，不联网，�
 
 顺带两处非缺陷修正：`/healthz` 由 `add_header Content-Type` 改为 `default_type`（前者会与 nginx 默认值叠加，线上实测响应头是 `application/octet-stream,text/plain` 两个值）；`restore.sh` 无参数改为交互选单并加无 tty 保护（原注释与实现不符，注释说交互、代码走自动）。
 
+**本节修复的实机复验（v2test3，根目录布局经 Actions #21 构建）**：新实例开机 6 秒即完成"拉取上一实例备份→自检→接管"；随后手动备份 `data-…23-07-47.zip` + 观察 8 个周期（> 6 冷却），日志**零**"检测到新备份→执行热还原"行——v2test2 时代"每次备份必自还原重启一次"的空转确认消失；`/healthz` 响应头实测为单一 `text/plain`。
+
 ### 8.5 文档与线上实况的一处偏差（未改代码，按需选边）
 
 `9.3` 记的是隧道路由 `h2c://localhost:80`（即经容器内 nginx 分流）。但实测：
@@ -306,9 +308,9 @@ Windows 开发机不装 Docker：把本目录推到 `xp1042/nz` **仓库根**（
 node contents-push.mjs xp1042/nz main "Dockerfile=.../Dockerfile" "file/start.sh=.../file/start.sh" ...
 # 触发构建（workflow 文件名要 .yml 结尾的仓库原名）
 node gh-dispatch.mjs <gh_token> xp1042/nz Packages.yml main \
-  "image_name=jk,image_tag=v2test2,dockerfile=Dockerfile,context=."
+  "image_name=jk,image_tag=v2test3,dockerfile=Dockerfile,context=."
 # 轮询镜像就绪（匿名 manifest 200 = 可拉）
-node check-ghcr.mjs v2test2
+node check-ghcr.mjs v2test3
 ```
 
 注意 Dockerfile 是 `COPY file/* /app/`，**构建 context 必须是同时含 `Dockerfile` 和 `file/` 的目录**。
