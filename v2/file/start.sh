@@ -106,20 +106,21 @@ EOF
 # 让 config.yaml 的 agent_secret_key 恒等于 env 的 NZ_CLIENT_SECRET。
 # 返回 0=有改动（调用方需重启面板），1=无需改动
 sync_agent_secret() {
+  # 契约：返回 0(真) = 本次有改动，调用方需重启面板；返回 1(假) = 无改动，勿重启。
   [ -f "$CONFIG_FILE" ] || return 1
-  local cur changed=1
+  local cur changed=0
   cur="$(grep -E '^[[:space:]]*agent_secret_key:' "$CONFIG_FILE" | head -n1 \
           | sed -E 's/^[[:space:]]*agent_secret_key:[[:space:]]*//' | tr -d "\"' " )"
   if [ -z "$cur" ]; then
     printf 'agent_secret_key: %s\n' "$NZ_CLIENT_SECRET" >> "$CONFIG_FILE"
     log "config.yaml 缺少 agent_secret_key，已注入"
+    changed=1
   elif [ "$cur" != "$NZ_CLIENT_SECRET" ]; then
     warn "检测到 token 漂移（库内 $cur ≠ env），已按 env 改写"
     sed -i -E "s|^[[:space:]]*agent_secret_key:.*|agent_secret_key: $NZ_CLIENT_SECRET|" "$CONFIG_FILE"
-  else
-    changed=0
+    changed=1
   fi
-  return $changed
+  [ "$changed" = 1 ] && return 0 || return 1
 }
 
 apply_force_auth() {
