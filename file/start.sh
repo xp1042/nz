@@ -171,7 +171,7 @@ server {
 
     # 给 PaaS 健康检查用的静态端点（不打到面板，面板挂了它也返回 200，
     # 所以只用于「容器活着」，真正的面板探活由 supervise() 直连 $DASH_PORT）
-    location = /healthz { add_header Content-Type text/plain; return 200 "ok"; }
+    location = /healthz { default_type text/plain; return 200 "ok"; }
 
     location ^~ /proto.NezhaService/ {
         grpc_set_header Host \$host;

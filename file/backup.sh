@@ -196,8 +196,14 @@ for _i in 1 2 3 4; do
 done
 
 if [ "$APPLIED" = "$BACKUP_FILE" ]; then
+  # 关键：本地数据此刻**就是**这个包，必须登记为"已生效"。
+  # 否则冷却期满后 periodic_restore 会拿 README 指向的新包名与本地记录的旧包名比出"不同"，
+  # 于是把自己刚推上去的备份再原样还原回来，白白触发一次全量重启
+  # （2026-09-10 线上实测：每次备份后约 5 分钟必现 21:53 备份 -> 21:58 自还原+重启）。
+  printf '%s\n' "$BACKUP_FILE" > "$RESTORE_STATE"
   flag_arm                                   # 正常冷却：期间不还原
 else
+  # 远端未确认 -> 不登记状态，宁可三倍长冷却后再由轮询判定
   flag_arm_long                              # 远端未确认：三倍冷却，绝不误还原旧包
 fi
 echo "$(date +%Y-%m-%d)" > "$BACKUP_STATE"

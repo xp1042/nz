@@ -52,7 +52,10 @@ BACKUP_KEEP_COUNT="${BACKUP_KEEP_COUNT:-5}" # 远端备份保留份数
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 MAX_UPLOAD_MB="${MAX_UPLOAD_MB:-90}"
 WITH_LOCK_TIMEOUT="${WITH_LOCK_TIMEOUT:-120}"
-MIN_SERVERS_FOR_BACKUP="${MIN_SERVERS_FOR_BACKUP:-2}"
+# 默认 1（不是 2）：挡住的是"实例重建后还没还原成的空库"（servers=0），
+# 而单节点面板（servers=1）是完全正常的形态。原默认 2 会让这类部署**永远不备份**
+# ——2026-09-10 线上就是因为这个被迫显式设 MIN_SERVERS_FOR_BACKUP=1。
+MIN_SERVERS_FOR_BACKUP="${MIN_SERVERS_FOR_BACKUP:-1}"
 
 export TZ="${TZ:-Asia/Shanghai}"
 
@@ -108,18 +111,27 @@ with_lock() {
 # 语义同上游 /tmp/flag + 计数后缀，但周期数可配。
 FLAG_PREFIX="$FLAG_DIR/backup-inprogress"
 
-flag_arm() {
+# 语义：文件名后缀 = **剩余**冷却周期数（不是已耗周期数）。
+# 曾经的写法是「已耗计数 + 用全局 RESTORE_COOLDOWN 判到期」，后果是 flag_arm_long
+# 写入的 3 倍冷却（后缀 18）在第一个 tick 就被判为"早该到期"并删除 —— 长冷却实际
+# 持续 0 个周期，而它恰恰用在"远端回读没确认"这个最该按住还原的时刻。
+_flag_set() {  # _flag_set <剩余周期数> <原因标记>
+  local n="$1" why="$2"
+  case "$n" in ''|*[!0-9]*) n=1 ;; esac
+  [ "$n" -lt 1 ] && n=1
   mkdir -p "$FLAG_DIR" 2>/dev/null || true
   rm -f "$FLAG_DIR"/backup-inprogress.* 2>/dev/null || true
-  printf '%s arm\n' "$(ts)" > "$FLAG_PREFIX.1"
+  printf '%s %s remain=%s\n' "$(ts)" "$why" "$n" > "$FLAG_PREFIX.$n"
+}
+
+flag_arm() {
+  _flag_set "$RESTORE_COOLDOWN" arm
   log "还原冷却已启动：$RESTORE_COOLDOWN 个周期（约 $((RESTORE_COOLDOWN * CHECK_INTERVAL / 60)) 分钟）"
 }
 
 flag_arm_long() {  # 回读校验失败时用更长冷却
   local n=$(( RESTORE_COOLDOWN * 3 ))
-  mkdir -p "$FLAG_DIR" 2>/dev/null || true
-  rm -f "$FLAG_DIR"/backup-inprogress.* 2>/dev/null || true
-  printf '%s long-arm\n' "$(ts)" > "$FLAG_PREFIX.$n"
+  _flag_set "$n" long-arm
   warn "远端状态未确认，布置长冷却：$n 个周期"
 }
 
@@ -134,13 +146,12 @@ flag_tick() {
     if [ "$n" -gt "$bestn" ]; then bestn="$n"; best="$f"; fi
   done
   [ -z "$best" ] && return 1
-  if [ "$bestn" -ge "$RESTORE_COOLDOWN" ]; then
+  if [ "$bestn" -le 1 ]; then
     rm -f "$best"
-    log "还原冷却结束（$bestn/$RESTORE_COOLDOWN），恢复自动还原"
+    log "还原冷却结束，恢复自动还原"
     return 1
   fi
-  # 计数 +1 并落回文件（保留原因备注，便于排查）
-  printf '%s tick %s/%s\n' "$(ts)" "$((bestn + 1))" "$RESTORE_COOLDOWN" > "$FLAG_PREFIX.$((bestn + 1))"
+  printf '%s tick remain=%s\n' "$(ts)" "$((bestn - 1))" > "$FLAG_PREFIX.$((bestn - 1))"
   rm -f "$best"
   return 0
 }
