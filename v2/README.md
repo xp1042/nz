@@ -3,7 +3,7 @@
 自动备份 / 可选版本 / 可选择是否更新 —— 在原 `koyeb.zip` 基础上，一次性打进上游
 `Docker-for-Nezha-Argo-server-v1.x` 的 7 项机制，并修掉原版几处会静默失效的逻辑。
 
-> **安装好第一件事，必须进面板改密码。**
+> **安装好第一件事：进面板改密码（admin/admin 首启）。改完立即触发一次备份固化，否则热还原会回退凭证（见 9.6）。**
 
 ---
 
@@ -211,6 +211,7 @@ docker run --rm -p 8080:8080 \
 
 服务端口填 `80`（或让平台注入 `PORT`，两者本版都支持），健康检查路径可选 `/healthz`。
 其余变量按上表在 Secrets/Environment 里配。
+**完整的 Koyeb 实操路径（无 Docker 构建流水线、API 部署、隧道回源选择、踩坑清单）见第九节。**
 
 ### 跑测试
 
@@ -232,18 +233,108 @@ bash tests/smoke.sh     # lib.sh 纯逻辑 34 项断言（不联网、不需 zip
 
 ---
 
-## 八、验证状态（诚实边界）
+## 八、验证状态
 
-已在 Linux 语义下自动化验证：
+### 8.1 开发机自动化（bash -n / nginx 渲染断言 / lib.sh 34 项纯逻辑断言）
 
 - `bash -n` 六个脚本全通过
 - `tests/verify.sh`：注入 `PORT=7777` 渲染 nginx，断言 `listen 7777 default_server;`、`listen 9443 ssl;`、`127.0.0.1:18008` 出现，且**无残留 `listen 80`**、`$host` 未被 shell 展开、gRPC upstream 保留
 - `tests/smoke.sh` 34 项断言：端口体系、README 双格式解析、`backup` 标记不误判、冷却 tick 递增至释放、长冷却 3 倍、锁互斥与陈旧锁抢占自愈、pid 判活、`agent_secret_key` 漂移复位
 
-**未验证**（开发机无 Docker/WSL，且 Git Bash 缺 `zip`/`sqlite3`/`jq`）：
+### 8.2 Koyeb 实机全链路（2026-09-10，镜像 v2test1/v2test2，服务 jkv2）—— 原"未验证"清单现已全部转正
 
-- `backup.sh` / `restore.sh` 的真实 GitHub API 读写闭环
-- 真实 nezha 面板对 `config.yaml` 模板键位的接受度（若面板拒绝启动，设 `PRESET_CONFIG=false` 即回退到原版"全交面板自建"行为）
-- `NZ_TARGET=local` 下面板与探针的实际建连
+| 机制 | 实机结果 |
+|---|---|
+| 第 3 项 `$PORT` 参数化 | ✓ Koyeb 注入 `PORT=80`，日志 `端口规划：HTTP=80 (来自 $PORT=80)`，health_check `/healthz` 通过 |
+| 第 4 项 `NZ_TARGET=local` | ✓ 探针经 `127.0.0.1:8008` 直连，面板 `[1] 在线`；隧道故障不误报离线 |
+| 第 5 项 备份闭环 | ✓ README 改 `backup` → ≤60s 内在线快照→打包→上传 `data-<ts>.zip`+`manifest.txt`→回写 README→自动布冷却；远端回读校验通过 |
+| 第 6 项 跨实例热还原 | ✓ **新部署首周期**自动从 GitHub 拉回上一实例的备份、完整性自检（节点数）、一次干净重启接管全部数据 —— 免疫"鬼魂库/数据回退"类事故 |
+| 第 1 项 预置 config 模板 | ✓ 真实面板二进制接受 `preseed_data` 生成的 `config.yaml` 键位，首启 admin/admin，`sync_agent_secret` 复位生效 |
+| 第 7 项 防抖 | ✓ 备份→冷却→还原→一次重启 全程无自踩；`restart.sh all` 后 HTTP 探活判定正常 |
+| 隧道模式 | ✓ `ARGO_AUTH`+`ARGO_DOMAIN=jk.xp1042.bond`，cloudflared 注册、Web+gRPC 双通道、探针经公网隧道回连在线 |
+| 凭证一致性 | ✓ 改用户名/密码后立即触发备份 → 备份含新凭证 → 容器热还原后新凭证仍有效（详见九） |
 
-上容器后建议按此顺序确认：`tests/verify.sh` → `./start.sh self-test` → 配齐 GH 变量后 `./backup.sh f` → 改远端 README 首行看 `periodic_restore` 是否在 `CHECK_INTERVAL` 内响应。
+### 8.3 本次实机揪出并修复的一个真 bug（v2test1 → v2test2）
+
+`sync_agent_secret()` 返回语义与调用方**恰好反转**：原实现"干净（token 无漂移）"时返回 0，而 `supervise()` 用 `if sync_agent_secret; then 重启 dashboard`，把 0 当"有改动"→ **面板每 60s 被误重启一次**（pid 持续轮换，日志刷 `agent_secret_key 被外部改动`）。修复（commit `f9b261b`）：
+
+```bash
+# 契约：0(真)=本次有改动需重启；1(假)=无改动勿重启
+[ "$changed" = 1 ] && return 0 || return 1
+```
+
+修复后实测 20+ 分钟零误重启。**这正是第 2 项守护机制最典型的反模式教训：守护逻辑自身制造的故障比它救的活多。**
+
+---
+
+## 九、Koyeb 部署实战（可复制路径 + 踩坑清单）
+
+### 9.1 无 Docker 的机器怎么出镜像（GitHub Actions 流水线）
+
+Windows 开发机不装 Docker：把本目录推到 `xp1042/nz` 的 `v2/`，用仓库自带的 `Packages.yml`（workflow_dispatch，参数 `image_name/image_tag/dockerfile/context`）在 ubuntu runner 上构建并推到 `ghcr.io/<user>/jk:<tag>`（设 Public 免凭证拉取）。
+
+```bash
+# 推文件（GitHub Contents API，path=本地文件 多组）
+node contents-push.mjs xp1042/nz main "v2/Dockerfile=.../Dockerfile" "v2/file/start.sh=.../start.sh" ...
+# 触发构建（workflow 文件名要 .yml 结尾的仓库原名）
+node gh-dispatch.mjs <gh_token> xp1042/nz Packages.yml main \
+  "image_name=jk,image_tag=v2test2,dockerfile=v2/Dockerfile,context=v2"
+# 轮询镜像就绪（匿名 manifest 200 = 可拉）
+node check-ghcr.mjs v2test2
+```
+
+注意 Dockerfile 是 `COPY file/* /app/`，**构建 context 必须是同时含 `Dockerfile` 和 `file/` 的目录**。
+
+### 9.2 Koyeb 侧
+
+- API base 是 **`https://app.koyeb.com/v1`**（不是 api.koyeb.com）。`POST /v1/services` 建服务（definition 见 tools/deploy-def-v2.json 形态：image + env[] + port 80 http + health_check HTTP `/healthz` + regions [fra] + scaling min0/max1 deep_sleep 3900s）。
+- 免费计划**只允许一个运行中服务**；新部署 `PUT /v1/services/{id}`（整份 definition）切 tag 即滚动发布，每次发布=一次新容器=一次开机还原流程。
+- `GET /v1/services`（列表）里才带 `definitions[].routes[].url`；`/v1/deployments/{id}/status`、列表里 `routes[].url` 等变体端点实测 404/缺字段，别浪费时间。
+- 免费计划 65 分钟无流量深睡，**只有打到 `*.koyeb.app` 边缘的流量才计入 idle**。保活脚本打 `https://<svc>.koyeb.app/healthz`（每 45s 足够）。隧道域名 jk.xp1042.bond 的流量不算数。
+
+### 9.3 Cloudflare 隧道侧（这次烧了最多口舌的地方）
+
+1. **token 种类先分清**：R2 页生成的 `cfat_` 是对象存储 token（对 /cfd/tunnels、zone DNS 全部无效）；`cfut_` 才是 API Token。建 API Token 用 *Create Custom Token*，权限必须**两行都加**：
+   - `Account · Cloudflare Tunnel · Edit`（建隧道/取连接器 token）
+   - `Zone · DNS · Edit`（jk 记录；不过走后台建 Public hostname 的话 CF 自动代建）
+   - 缺 Tunnel 权限时报错**不是 403**，而是诡异的 `7003/7000 Could not route / No route for that URI` —— 见到这俩码先查 token 权限，不是路径错。
+2. **走 Zero Trust 后台手建隧道完全可行**（连接器 token 解码可验：`a`=account、`t`=tunnel uuid）：Create tunnel(Cloudflared) → Public hostname `jk.xp1042.bond` → URL 填 **`h2c://localhost:80`** → ⋯ → Get token 即 `ARGO_AUTH`。
+3. **回源地址为什么选 `h2c://localhost:80`**：容器内 nginx :80 已 `http2 on` 且带 `/proto.NezhaService/ → grpc_pass`，web+gRPC 一次分流到位、无 TLS 校验问题。若填 `https://localhost:443`（自签）必须同时开 Skip TLS verify **且**保证 HTTP/2 回源——少任何一项的症状是"面板 API 能用、探针永远离线"，极难查。
+4. **同一 hostname 多条 Public hostname 规则时第一条先命中**，第二条是死规则；catch-all 保留 `http_status:404`。
+5. cloudflared 的注册日志在容器内 `logs/cloudflared.log`，Koyeb stdout 看不到——**验证以效果为准**：`GET https://<域名>/healthz` 回 nginx 的 `200 ok`（=经 nginx :80）+ 面板节点在线。
+
+### 9.4 面板 API 速查（本镜像实测，新版 nezha/gin 风格，与 V1 老面板不同）
+
+```text
+POST /api/v1/login          → 200 + {data:{token}}；失败也是 200 + {error:ApiErrorUnauthorized}
+                              （判成败必须看 data.token，不能看状态码）
+GET  /api/v1/server         → Bearer token；节点数组，last_active 为 0001-01-01 即离线
+PATCH /api/v1/server/{id}   → 改节点名；CSRF：用 login 响应 set-cookie 里真实的 nz-csrf 值
+                              双提交（Cookie: nz-csrf=X + 头 X-CSRF-Token: X），自造值必 403
+POST /api/v1/profile        → 改用户名/密码正解：
+                              {original_password, new_username, new_password}
+                              （PUT/PATCH /user、POST /user(=注册撞唯一约束) 全是歧路，
+                               源码见 cmd/dashboard/controller/user.go:55 updateProfile）
+```
+
+**首启管理员是 admin/admin；`ADMIN_USER/ADMIN_PASSWORD` 环境变量本镜像不读取**，改凭证走上面的 profile API 或后台页面。
+
+### 9.5 备份库（nezha_backup）注意
+
+- 仓库是 **private**：匿名 `GET /repos/.../readme` 返回 404 不是被删，**查询必须带 token**。
+- 备份按时间戳命名 + `BACKUP_KEEP_COUNT=5` 滚动；README 首行=当前生效备份；`manifest.txt` 明文可查节点数/大小。
+- 加密 zip 用 `ZIP_PASSWORD`（ZipCrypto 弱加密，安全边界=仓库 private+token 最小权限，README 七已声明）。
+
+### 9.6 运维铁律（血泪浓缩）
+
+1. **改了面板内任何要持久化的东西（凭证/节点名/设置）→ 立刻触发一次备份**（README 写 `backup`），否则下次容器重建/热还原回退到旧备份。
+2. 同一时刻**只允许一个实例活着**（免费计划天然保证；付费多实例会共写备份库互相踩）。
+3. 换镜像 tag 后先看日志确认 `被外部改动` / `重启 dashboard` 不刷屏，再测功能（守护 bug 都是刷屏式的，很好认）。
+4. 验证探针在线以**面板 API `last_active` 推进**为准，肉眼"页面能开"不算数。
+5. 保活、监控、GitHub 操作用**独立 .mjs 脚本**而不是 shell 内联拼 JSON——引号转义在 PowerShell 里必炸（`node -e "..."` 带反引号/单引号即坟场）。
+
+### 9.7 仍按原样保持"未验证"边界的内容
+
+- `renew.sh` 版本自更新（本次部署 `NO_AUTO_RENEW=1` 关闭）
+- `SEED_DB_URL` 导入预置库、`Force_Auth`、GitHub OAuth 段
+- 隧道 JSON(TunnelSecret) 模式、SSH 穿透（本来就不支持，见七）
